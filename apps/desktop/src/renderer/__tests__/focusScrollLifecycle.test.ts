@@ -425,6 +425,25 @@ describe('MessageStream focus cancellation wiring', () => {
     expect(compensation).not.toContain('if (anchor.messageClientId && snapshotMessageGone) {');
   });
 
+  it('keeps auto-follow authoritative when turn completion rebuilds grouping keys', () => {
+    const compensation = sourceBetween(
+      '// ── 删除靠前 message 后的视口保位（#2289）──',
+      '// ── post-load auto-expand ──',
+    );
+    const followGuard = compensation.indexOf('if (isNearBottomRef.current) {');
+    const pendingRestore = compensation.indexOf(
+      'const pending = pendingReanchorScrollRef.current;',
+    );
+    const recoveredGroupingKey = compensation.indexOf(
+      'if (snapshot && recoveredKey && !snapshotMessageGone)',
+    );
+
+    expect(followGuard).toBeGreaterThanOrEqual(0);
+    expect(compensation).toContain('pendingReanchorScrollRef.current = null;');
+    expect(followGuard).toBeLessThan(pendingRestore);
+    expect(followGuard).toBeLessThan(recoveredGroupingKey);
+  });
+
   it('finishes an older chip or rail navigation before starting a jump to bottom', () => {
     const jumpToBottom = sourceBetween(
       'const scrollToBottomSmooth = useCallback(() => {',

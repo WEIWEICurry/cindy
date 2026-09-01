@@ -5132,6 +5132,15 @@ export function MessageStream({
     const prevAllItems = prevAllItemsRef.current;
     prevVisibleItemsRef.current = visibleRenderItems;
     prevAllItemsRef.current = allRenderItems;
+
+    // #3067: turn 完成会把运行中工作组重建为完成态分组，key / 数量都可能变化。
+    // 贴底态必须始终由 auto-follow 接管；若先执行旧锚点恢复，会覆盖上方同一提交里的
+    // pinToBottom，把视口拉回本轮 user 消息。同步消费待重锚，避免用户稍后上滚时重放旧落点。
+    if (isNearBottomRef.current) {
+      pendingReanchorScrollRef.current = null;
+      return;
+    }
+
     const snapshot = lastViewportTopRef.current;
     const prevSeq = prevAllItems.length > 0 ? prevAllItems : prevVisibleItems;
 
@@ -5191,8 +5200,6 @@ export function MessageStream({
       if (programmaticScrollRef.current) deferredDeleteCompensationRef.current = true;
       return;
     }
-    if (isNearBottomRef.current) return;
-
     let anchor = snapshot;
     if (restoringRef.current) {
       const snap = restoreSnapshotRef.current;
