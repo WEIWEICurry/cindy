@@ -138,6 +138,17 @@ describe('DesktopNotifier desktop status mapping', () => {
     });
   });
 
+  it.each(['success', 'aborted', 'interrupted'] as const)(
+    'does not bypass Agent Island for a sessionless %s run',
+    async (status) => {
+      const { notifier } = createNotifier({ isAgentIslandEnabled: () => true });
+
+      await notifier.notify(schedule, { ...run(status), sessionId: undefined });
+
+      expect(showDesktopSessionEvent).not.toHaveBeenCalled();
+    },
+  );
+
   it('mobile 正文带运行结果摘要:成功用 resultText,失败用 errorMsg', async () => {
     const { notifier } = createNotifier();
 

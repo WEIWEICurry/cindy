@@ -27,7 +27,7 @@ export interface DesktopNotifierDeps {
   logger: Logger;
   /** Global desktop preference, evaluated at send time. */
   shouldNotifyDesktop: () => boolean;
-  /** Agent Island only replaces desktop notifications for runs bound to a session. */
+  /** Whether Agent Island should arbitrate routine scheduler desktop notifications. */
   isAgentIslandEnabled: () => boolean;
   wecomGroupPublisher?: WecomGroupNotificationPublisher;
 }
@@ -42,7 +42,7 @@ export class DesktopNotifier implements Notifier {
     if (
       schedule.notify.desktop &&
       this.deps.shouldNotifyDesktop() &&
-      (!this.deps.isAgentIslandEnabled() || !run.sessionId)
+      (!this.deps.isAgentIslandEnabled() || (run.status === 'failed' && !run.sessionId))
     ) {
       try {
         this.notifyDesktop(schedule, run);
