@@ -23,12 +23,16 @@ import { useLogUploadSettings } from '@/hooks/useLogUploadSettings';
 import { extractIpcError } from '@/utils/ipcError';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 import { StorageManagementCard } from './StorageManagementCard';
+import { ClaudeCodeRuntimeCard } from './ClaudeCodeRuntimeCard';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { LEGAL_LINKS } from '../../../shared/legalLinks';
+import type { ClaudeCodeRuntimeDecision } from '../../../shared/claudeCodeRuntimeSettings';
 
 interface AgentVersionState {
   loading: boolean;
   version: string | null;
+  binaryPath?: string | null;
+  runtimeDecision?: ClaudeCodeRuntimeDecision | null;
   error?: string;
 }
 
@@ -64,7 +68,13 @@ function useAgentBinaryVersion(kind: 'claude-code' | 'codex'): AgentVersionState
       .getBinaryVersion(kind)
       .then((res) => {
         if (cancelled) return;
-        setState({ loading: false, version: res.version, error: res.error });
+        setState({
+          loading: false,
+          version: res.version,
+          binaryPath: res.binaryPath,
+          runtimeDecision: res.runtimeDecision,
+          error: res.error,
+        });
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -92,6 +102,16 @@ function renderVersion(state: AgentVersionState, t: (key: string) => string): st
   return t('settings.about.version.unknown');
 }
 
+function renderClaudeCodeVersion(
+  state: AgentVersionState,
+  t: (key: string) => string,
+): string {
+  const version = renderVersion(state, t);
+  const source = state.runtimeDecision?.activeSource;
+  if (!source) return version;
+  return `${t(`settings.about.claudeRuntime.source.${source}`)} · ${version}`;
+}
+
 export function AboutSection() {
   const { t } = useTranslation();
   const claudeCode = useAgentBinaryVersion('claude-code');
@@ -107,6 +127,8 @@ export function AboutSection() {
           {t('settings.about.description')}
         </p>
       </div>
+
+      <ClaudeCodeRuntimeCard />
 
       {/* Info Card */}
       <div
@@ -132,7 +154,8 @@ export function AboutSection() {
         <Divider />
         <InfoRow
           label={t('settings.about.claudeCodeVersionLabel')}
-          value={renderVersion(claudeCode, t)}
+          value={renderClaudeCodeVersion(claudeCode, t)}
+          title={claudeCode.binaryPath ?? undefined}
           dim={!claudeCode.version}
         />
         <Divider />
