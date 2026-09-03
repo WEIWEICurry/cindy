@@ -62,6 +62,63 @@ describe('system Claude Code resolver', () => {
     ).resolves.toMatchObject({ ok: true, binaryPath: candidate, version: '99.0.0' });
   });
 
+  it.each([
+    ['an unreadable version', null],
+    ['an outdated version', '1.0.0'],
+  ])('continues PATH discovery after %s', async (_label, firstVersion) => {
+    const firstDirectory = path.resolve('first-claude-bin');
+    const secondDirectory = path.resolve('second-claude-bin');
+    const firstCandidate = path.join(firstDirectory, 'claude');
+    const secondCandidate = path.join(secondDirectory, 'claude');
+    const probeVersion = vi.fn(async (candidate: string) =>
+      candidate === firstCandidate ? firstVersion : '99.0.0',
+    );
+    const resolverDeps = {
+      ...deps({ platform: 'linux' }),
+      envPath: [firstDirectory, secondDirectory].join(path.delimiter),
+      stat: vi.fn(async (candidate: string) => {
+        if (candidate !== firstCandidate && candidate !== secondCandidate) throw new Error('missing');
+        return { isFile: () => true };
+      }),
+      probeVersion,
+    };
+
+    await expect(resolveSystemClaudeCode('', undefined, resolverDeps)).resolves.toMatchObject({
+      ok: true,
+      binaryPath: secondCandidate,
+      version: '99.0.0',
+    });
+    expect(probeVersion).toHaveBeenNthCalledWith(1, firstCandidate, undefined);
+    expect(probeVersion).toHaveBeenNthCalledWith(2, secondCandidate, undefined);
+  });
+
+  it('returns the most actionable version failure after exhausting PATH candidates', async () => {
+    const unreadableDirectory = path.resolve('unreadable-claude-bin');
+    const outdatedDirectory = path.resolve('outdated-claude-bin');
+    const unreadableCandidate = path.join(unreadableDirectory, 'claude');
+    const outdatedCandidate = path.join(outdatedDirectory, 'claude');
+    const resolverDeps = {
+      ...deps({ platform: 'linux' }),
+      envPath: [unreadableDirectory, outdatedDirectory].join(path.delimiter),
+      stat: vi.fn(async (candidate: string) => {
+        if (candidate !== unreadableCandidate && candidate !== outdatedCandidate) {
+          throw new Error('missing');
+        }
+        return { isFile: () => true };
+      }),
+      probeVersion: vi.fn(async (candidate: string) =>
+        candidate === outdatedCandidate ? '1.0.0' : null,
+      ),
+    };
+
+    await expect(resolveSystemClaudeCode('', undefined, resolverDeps)).resolves.toMatchObject({
+      ok: false,
+      reason: 'version_too_old',
+      binaryPath: outdatedCandidate,
+      version: '1.0.0',
+    });
+  });
+
   it('distinguishes missing and non-executable custom paths', async () => {
     await expect(
       resolveSystemClaudeCode(path.resolve('missing-claude'), undefined, deps({ exists: false })),

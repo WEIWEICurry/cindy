@@ -103,6 +103,7 @@ export async function resolveSystemClaudeCode(
   const candidates = candidatePaths(deps, customPath.trim());
   let foundCandidate = false;
   let unsupportedLauncherFound = false;
+  let bestVersionFailure: ClaudeCodeRuntimeProbeResult | null = null;
 
   for (const candidate of candidates) {
     if (signal?.aborted) return failure('version_unavailable');
@@ -132,13 +133,24 @@ export async function resolveSystemClaudeCode(
     }
 
     const version = await deps.probeVersion(candidate, signal);
-    if (!version) return failure('version_unavailable');
+    if (!version) {
+      const result = {
+        ...failure('version_unavailable'),
+        binaryPath: candidate,
+      };
+      if (customPath) return result;
+      bestVersionFailure ??= result;
+      continue;
+    }
     if (version.includes('-') || !isBinaryVersionNotOlder(version, CLAUDE_CODE_MINIMUM_VERSION)) {
-      return {
+      const result = {
         ...failure('version_too_old'),
         binaryPath: candidate,
         version,
       };
+      if (customPath) return result;
+      if (bestVersionFailure?.reason !== 'version_too_old') bestVersionFailure = result;
+      continue;
     }
     return {
       ok: true,
@@ -148,6 +160,7 @@ export async function resolveSystemClaudeCode(
     };
   }
 
+  if (bestVersionFailure) return bestVersionFailure;
   return failure(
     unsupportedLauncherFound
       ? 'unsupported_launcher'
