@@ -213,6 +213,7 @@ import { RecentPhotosStrip, ScreenshotsGrid } from '@/session/ContextSheetMediaV
 import { ContextSheetGoalView, goalStatusLabel } from '@/session/ContextSheetGoalView';
 import { parseGoalLimitsRouteParam } from '@/session/goalLimitsRouteParam';
 import { ComposerAttachmentCollapsedBadge, ComposerAttachmentTray } from '@/session/ComposerAttachmentTray';
+import { SlowSendNotice } from '@/session/SlowSendNotice';
 import { PlanModeChip } from '@/session/PlanModeChip';
 import { ImageLightbox } from '@/session/ImageLightbox';
 import { pickWriteFields, retryPatchWhileLatest, writeGuardFields } from '@/session/swipeRowRegistry';
@@ -984,6 +985,7 @@ export default function SessionScreen() {
     connectionEpoch,
     connectionIssue,
     getPresenceAvailability,
+    getSubscriptionIdentity,
     invoke,
     openLink,
     reopenLink,
@@ -1652,6 +1654,14 @@ export default function SessionScreen() {
   // lastSyncedAt 不会归零,不能用来判断「当前会话本次连接已同步」。epoch 经 ref 读取,
   // 避免把 connectionEpoch 加进 syncSession deps 引发额外整窗重拉。
   const [readAckSyncedKey, setReadAckSyncedKey] = useState<string | null>(null);
+  const [contentSyncedKey, setContentSyncedKey] = useState<string | null>(null);
+  const subscriptionAck = deviceId && sessionId
+    ? getSubscriptionIdentity?.(deviceId, ['sessions', `session:${sessionId}`]) ?? null
+    : null;
+  const contentRecoveryKey = subscriptionAck === null ? null
+    : JSON.stringify([deviceId, sessionId, connectionEpoch, subscriptionAck]);
+  const contentRecoveryKeyRef = useRef(contentRecoveryKey);
+  contentRecoveryKeyRef.current = contentRecoveryKey;
   // interrupted 只依赖 getSession 的权威时间戳；兄弟快照失败不能把这道门永久关住。
   // 已读回执仍继续使用上面的整窗门槛，避免消息未同步就提前清 attention。
   const [sessionMetadataSyncedKey, setSessionMetadataSyncedKey] = useState<string | null>(null);
@@ -1986,11 +1996,22 @@ export default function SessionScreen() {
   );
   // 弱网普通断线也要有可见信号(消息流静默停更没有任何提示),经防闪延迟后显示
   const connectionRecoveryError = activeOutboxTransportError ?? connectionError;
+  const contentRecoveryState = contentRecoveryKey !== null
+    && contentSyncedKey === contentRecoveryKey
+    && readAckSyncedKey === `${sessionId}:${connectionEpoch}`
+    && !outboxRecoverySyncHeld
+    ? 'recovered' : 'syncing';
+  const recoveryStartedAtRef = useRef(Date.now());
+  useEffect(() => {
+    if (contentRecoveryState === 'syncing') recoveryStartedAtRef.current = Date.now();
+    else console.debug('[device-link] content recovered', { elapsedMs: Date.now() - recoveryStartedAtRef.current });
+  }, [contentRecoveryState]);
   const showConnectionBanner = useShowConnectionBanner(
     status,
     connectionRecoveryError,
     connectionIssue,
     isDeviceUnresponsive,
+    contentRecoveryState,
   );
   const hasCurrentSession = currentSession !== null;
   const currentAgentKind = useMemo(
@@ -3100,6 +3121,8 @@ export default function SessionScreen() {
   }, [connectionEpoch, deviceId, lastSyncedAt, maker, openLink, sessionAgentSwitchSupported, sessionId]);
 
   const syncSession = useCallback(async (syncRun: Pick<RemoteSyncRun, 'isStale' | 'replaceMessages'>) => {
+    const contentKeyAtStart = contentRecoveryKeyRef.current;
+    const snapshotStartedAt = Date.now();
     const options = { replaceMessages: syncRun.replaceMessages };
     if (!deviceId || !sessionId || syncRun.isStale()) return;
     const messageAuthority = remoteSessionStore.captureSessionMessageAuthority(sessionId);
@@ -3331,6 +3354,10 @@ export default function SessionScreen() {
       // 不在 connectionEpoch 刚推进时提前清，避免同一 commit 的 outbox effect 抢在 resync 前派发。
       setOutboxTransportHold((current) => current?.deviceId === deviceId ? null : current);
       setLastSyncedAt(Date.now());
+      setContentSyncedKey(contentKeyAtStart);
+      if (contentKeyAtStart !== null && contentRecoveryKeyRef.current === contentKeyAtStart) {
+        console.debug('[device-link] recovery snapshot applied', { elapsedMs: Date.now() - snapshotStartedAt });
+      }
       // 已读回执门槛:本会话在当前连接代完成过整窗同步。sessionId / epoch / 门槛代号
       // 都取 sync 开始时的快照——原地切 session、重连、attention 上升沿之后,启动更早
       // 的 in-flight sync 一律放弃落 key,只有触发点之后启动的 sync 才能重新写开门槛。
@@ -3363,6 +3390,13 @@ export default function SessionScreen() {
     (run) => syncSession(run),
     remoteSyncContextKey,
   );
+  // A snapshot fetched before the subscription ACK can miss the gap between
+  // the two. Reuse the existing coordinator to reconcile after this exact ACK.
+  useEffect(() => {
+    if (!contentRecoveryKey || status !== 'online') return;
+    if (!messageScreenFocusedRef.current || !messageAppActiveRef.current) return;
+    void requestSync({ reason: 'subscription-acked', replaceMessages: false });
+  }, [contentRecoveryKey, requestSync, status]);
   const load = useCallback(
     () => requestSync({ reason: 'passive-refresh' }),
     [requestSync],
@@ -8686,6 +8720,7 @@ export default function SessionScreen() {
                 loading={loading}
                 onSync={() => void requestSync({ reason: 'manual', replaceMessages: false })}
                 status={status}
+                recovery={contentRecoveryState}
                 variant="inline"
               />
             ) : null}
@@ -10032,6 +10067,7 @@ function SessionComposerInput({
   composerSendUnavailableReason, attachmentCount, pendingUploadCount,
   onPasteImages, onDragActiveChange, renderControls,
 }: SessionComposerInputProps) {
+  const creationTask = useNewSessionCreationTask(sessionId);
   const { document: composerDocument, draft } = useSyncExternalStore(source.subscribe, source.getSnapshot);
   const { t, i18n: i18nInstance } = useTranslation();
   const { colors } = useTheme();
@@ -10386,6 +10422,10 @@ function SessionComposerInput({
                   testID="session.composerScroll"
                 >
 
+                <SlowSendNotice
+                  startedAt={creationTask?.status === 'running' ? creationTask.startedAt : null}
+                  phase={creationTask?.phase ?? 'preparing'}
+                />
                 {attachmentError ? (
                   <Text style={styles.attachmentErrorText} testID="session.attachmentStatus">
                     {attachmentError}
